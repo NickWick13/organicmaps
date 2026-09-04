@@ -1,8 +1,5 @@
 package app.organicmaps.search;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.Intent;
 import android.location.Location;
@@ -22,7 +19,6 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
-import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -73,10 +69,6 @@ public class SearchFragment extends Fragment implements SearchListener, Categori
   private View mPickerActions;
   private View mYourLocation;
   private View mSearchIcon;
-  private int mSearchIconWidth;
-  @Nullable
-  private ValueAnimator mPickerActionsAnimator;
-  private boolean mPickerActionsShown;
   private PlaceholderView mResultsPlaceholder;
   private SearchShimmerView mShimmerView;
   private SearchPageViewModel mSearchViewModel;
@@ -269,91 +261,17 @@ public class SearchFragment extends Fragment implements SearchListener, Categori
     // Only while the row stays: dropping it as the row collapses makes the remaining one jump left.
     if (picking)
       UiUtils.showIf(hasUsableMyPosition() && !controller.hasMyPositionRoutePoint(), mYourLocation);
-    animatePickerActions(picking);
+    UiUtils.showIf(picking, mPickerActions);
+    UiUtils.showIf(!picking, mSearchIcon);
     final RouteMarkType pickType = controller.getWaitingPoiPickType();
     mToolbarController.setHint(
         pickType == null ? R.string.search : RoutePointLabels.pickTitle(pickType, controller.isPoiPickReplaceStop()));
   }
 
-  // Not TransitionManager: ChangeBounds suppresses layout on the toolbar row while the sheet re-layouts
-  // underneath it, which left the field stuck at stale bounds.
-  private void animatePickerActions(boolean show)
-  {
-    // The target, not the current state: a still-collapsing row would restart the animation.
-    if (mPickerActionsShown == show)
-      return;
-    mPickerActionsShown = show;
-
-    // Read before cancelling, which settles the row to its previous target.
-    final boolean wasVisible = UiUtils.isVisible(mPickerActions);
-    final int fromWidth = wasVisible ? mPickerActions.getWidth() : 0;
-    final float fromAlpha = wasVisible ? mPickerActions.getAlpha() : 0f;
-    final int fromIconWidth = UiUtils.isVisible(mSearchIcon) ? mSearchIcon.getWidth() : 0;
-    if (mPickerActionsAnimator != null)
-      mPickerActionsAnimator.cancel();
-
-    // Asked of the parent: layout skips a GONE child, so the row's own isLaidOut() never turns true.
-    final View toolbarRow = (View) mPickerActions.getParent();
-    if (!toolbarRow.isLaidOut() || !toolbarRow.isShown())
-    {
-      settlePickerActions(show);
-      return;
-    }
-
-    // The magnifier is redundant next to the shortcut buttons and the hint needs its 40dp: shrink it
-    // in the same pass, otherwise the field jumps by that width when it is toggled on its own.
-    final int toIconWidth = show ? 0 : mSearchIconWidth;
-    mSearchIcon.getLayoutParams().width = fromIconWidth;
-    UiUtils.show(mSearchIcon);
-
-    UiUtils.show(mPickerActions);
-    final int unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
-    mPickerActions.measure(unspecified, unspecified);
-    final int toWidth = show ? mPickerActions.getMeasuredWidth() : 0;
-    final float toAlpha = show ? 1f : 0f;
-
-    mPickerActionsAnimator = ValueAnimator.ofInt(fromWidth, toWidth);
-    mPickerActionsAnimator.setDuration(getResources().getInteger(R.integer.anim_default));
-    mPickerActionsAnimator.setInterpolator(new FastOutSlowInInterpolator());
-    mPickerActionsAnimator.addUpdateListener(animator -> {
-      final float fraction = animator.getAnimatedFraction();
-      mPickerActions.getLayoutParams().width = (int) animator.getAnimatedValue();
-      mPickerActions.setAlpha(fromAlpha + (toAlpha - fromAlpha) * fraction);
-      mSearchIcon.getLayoutParams().width = (int) (fromIconWidth + (toIconWidth - fromIconWidth) * fraction);
-      mSearchIcon.requestLayout();
-      mPickerActions.requestLayout();
-    });
-    // Fires on cancel too, so an interrupted run cannot leave the row holding width without content.
-    mPickerActionsAnimator.addListener(new AnimatorListenerAdapter() {
-      @Override
-      public void onAnimationEnd(Animator animation)
-      {
-        mPickerActionsAnimator = null;
-        settlePickerActions(show);
-      }
-    });
-    mPickerActionsAnimator.start();
-  }
-
   private void resetPickerActions()
   {
-    if (mPickerActionsAnimator != null)
-      mPickerActionsAnimator.cancel();
-    mPickerActionsShown = false;
-    settlePickerActions(false);
-  }
-
-  private void settlePickerActions(boolean show)
-  {
-    mPickerActions.getLayoutParams().width = ViewGroup.LayoutParams.WRAP_CONTENT;
-    mPickerActions.setAlpha(1f);
-    UiUtils.showIf(show, mPickerActions);
-    mPickerActions.requestLayout();
-    // Restore the width unconditionally: a cancelled animation would otherwise leave the icon at
-    // whatever intermediate width it held, and a GONE view keeps that stale width when shown again.
-    mSearchIcon.getLayoutParams().width = mSearchIconWidth;
-    UiUtils.showIf(!show, mSearchIcon);
-    mSearchIcon.requestLayout();
+    UiUtils.hide(mPickerActions);
+    UiUtils.show(mSearchIcon);
   }
 
   private boolean hasUsableMyPosition()
@@ -439,7 +357,6 @@ public class SearchFragment extends Fragment implements SearchListener, Categori
     mTabFrame = root.findViewById(R.id.tab_frame);
     mPickerActions = root.findViewById(R.id.picker_actions);
     mSearchIcon = root.findViewById(R.id.search_icon);
-    mSearchIconWidth = mSearchIcon.getLayoutParams().width;
     mYourLocation = root.findViewById(R.id.your_location);
     mYourLocation.setOnClickListener(v -> onYourLocationClicked());
     root.findViewById(R.id.choose_on_map).setOnClickListener(v -> mSearchFragmentListener.onChooseOnMapClicked());
@@ -623,8 +540,6 @@ public class SearchFragment extends Fragment implements SearchListener, Categori
   {
     mSearchDebounceHandler.removeCallbacks(mDebouncedRunSearch);
     SearchEngine.INSTANCE.removeListener(this);
-    if (mPickerActionsAnimator != null)
-      mPickerActionsAnimator.cancel();
     super.onDestroyView();
   }
 
@@ -1086,9 +1001,8 @@ public class SearchFragment extends Fragment implements SearchListener, Categori
         return;
       }
 
-      // updateFrames() only runs once the debounced search fires, too late to hide the shortcuts. The
-      // guard keeps setHint()'s relayout to the one character that matters.
-      if (mPickerActionsShown)
+      // updateFrames() only runs once the debounced search fires, too late to hide visible shortcuts.
+      if (UiUtils.isVisible(mPickerActions))
         updatePickerRows();
 
       runSearchDebounced();
